@@ -1,0 +1,41 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "install",
+            "command": "paket",
+            "args": [
+                "install"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "restore",
+            "command": "paket",
+            "args": [
+                "restore"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "build",
+            "command": "dotnet",
+            "type": "shell",
+            "args": [
+                "build",
+                "src/PlaneFit/PlaneFit.fsproj",
+                "/property:GenerateFullPaths=true",
+                "/consoleloggerparameters:NoSummary"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always"
+            },
+            "problemMatcher": "$msCompile"
+        }
+    ]
+}
