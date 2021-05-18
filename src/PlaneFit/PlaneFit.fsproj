@@ -4,8 +4,6 @@
     <TargetFramework>netcoreapp3.1</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="Model.fs" />
-    <Compile Include="App.fs" />
     <Compile Include="PocketPython.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

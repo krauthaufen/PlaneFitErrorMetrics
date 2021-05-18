@@ -11,10 +11,7 @@ Aardvark.Application.Slim
 Aardvark.Application.Slim.GL
 Aardvark.SceneGraph
 Aardvark.SceneGraph.IO
+Aardvark.Application.Utilities 
+Aardvark.Rendering.Text
 
-Aardvark.Service
-Aardvark.UI
-Aardvark.UI.Primitives
-Adaptify.MSBuild
-Aardium
 MathNet.Numerics  

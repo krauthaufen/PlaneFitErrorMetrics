@@ -1,41 +1,73 @@
-﻿open PlaneFit
-
-open System
+﻿open System
 open FSharp.Data.Adaptive
-
 open Aardvark.Base
 open Aardvark.Rendering
 open Aardvark.Application
-open Aardvark.Application.Slim
-open Aardvark.Service
-open Aardvark.UI
-open Aardium
-open Suave
-open Suave.WebPart
+open Aardvark.Application.Utilities
 open Aardvark.Geometry
 open PocketPython
+open Aardvark.SceneGraph
 
 type RegressionInfo3d =
     {
         Plane           : Plane3d
-        Trafo           : Trafo3d
-        Sizes           : V3d
+        PlaneToWorld    : Trafo3d
         Eigenvalues     : V3d
         AngularErrors   : V2d
     }
 
-    member x.Center = x.Trafo.Forward.C3.XYZ
-    member x.Normal = x.Trafo.Forward.C2.XYZ
-    member x.Axis0 = x.Trafo.Forward.C0.XYZ
-    member x.Axis1 = x.Trafo.Forward.C1.XYZ
+    member x.Center = x.PlaneToWorld.Forward.C3.XYZ
+    member x.Normal = x.PlaneToWorld.Forward.C2.XYZ
+    member x.Axis0 = x.PlaneToWorld.Forward.C0.XYZ
+    member x.Axis1 = x.PlaneToWorld.Forward.C1.XYZ
+    member x.Ellipsoid = 
+        let e = Euclidean3d.FromTrafo3d(x.PlaneToWorld, 1E-8)
+        Ellipsoid3d(e, x.Eigenvalues)
+
+module private Helpers =
+
+    let gamma z = 
+        let lanczosCoefficients = [76.18009172947146;-86.50532032941677;24.01409824083091;-1.231739572450155;0.1208650973866179e-2;-0.5395239384953e-5]
+        let rec sumCoefficients acc i coefficients =
+            match coefficients with
+            | []   -> acc
+            | h::t -> sumCoefficients (acc + (h/i)) (i+1.0) t
+        let gamma = 5.0
+        let x = z - 1.0
+        Math.Pow(x + gamma + 0.5, x + 0.5) * Math.Exp( -(x + gamma + 0.5) ) * Math.Sqrt( 2.0 * Math.PI ) * sumCoefficients 1.000000000190015 (x + 1.0) lanczosCoefficients
+
+    let beta x y =
+        gamma x * gamma y / gamma (x + y)     
+
+    let invFCDF (x : float) (d1 : float) (d2 : float) : float =
+        failwith "implement me"
 
 type LinearRegression3d with
     member x.GetRegressionInfo(?confidenceLevel : float, ?degreesOfFreedom : int) =
         let degreesOfFreedom = defaultArg degreesOfFreedom 2
         let confidenceLevel = defaultArg confidenceLevel 0.95
-        let struct(trafo, size) = x.GetTrafoAndSizes()
+        //let struct(trafo, size) = x.GetTrafoAndSizes()
        
-        let ev = size ** 2.0 
+        let c = x.Centroid
+        let (u, s, _vt) = SVD.Decompose x.CovarianceMatrix |> Option.get
+
+        let trafo =
+            Trafo3d(
+                M44d(
+                    u.M00, u.M01, u.M02, c.X,
+                    u.M10, u.M11, u.M12, c.Y,
+                    u.M20, u.M21, u.M22, c.Z,
+                    0.0, 0.0, 0.0, 1.0
+                ),
+                M44d(
+                    u.M00, u.M10, u.M20, -Vec.dot u.C0 c,
+                    u.M01, u.M11, u.M21, -Vec.dot u.C1 c,
+                    u.M02, u.M12, u.M22, -Vec.dot u.C2 c,
+                    0.0, 0.0, 0.0, 1.0
+                )
+            )
+
+        let ev = s.Diagonal
         let angles = 
             let inline fppf (x : float) (d1 : int) (d2 : int) =
                 MathNet.Numerics.Distributions.FisherSnedecor.InvCDF(float d1, float d2, x)
@@ -60,8 +92,7 @@ type LinearRegression3d with
             ) 
         {
             Plane           = Plane3d(Vec.normalize trafo.Forward.C2.XYZ, trafo.Forward.C3.XYZ)
-            Trafo           = trafo
-            Sizes           = size
+            PlaneToWorld    = trafo
             Eigenvalues     = ev
             AngularErrors   = angles
         }
@@ -86,11 +117,10 @@ let main args =
         Log.stop()
         Trafo3d.FromBasis(x,y,z,pos)
 
-
     let points = 
-        Array.init 35 (fun _ ->
-            let pos = rand.UniformV2d() * 10.0 - 5.0
-            let err = (rand.UniformDouble() * 2.0 - 1.0) * 0.7
+        Array.init 250 (fun _ ->
+            let pos = rand.UniformV2d() * V2d(10.0, 6.0) - V2d(5.0, 3.0)
+            let err = (rand.UniformDouble() * 2.0 - 1.0) * 0.9
             frame.Forward.TransformPos(V3d(pos, err))
         )
 
@@ -104,6 +134,9 @@ let main args =
             sprintf "measurement = Orientation(np.array([%s]));" arr
             "print(\"center: \", measurement.center);"
             "print(\"eigen:  \", measurement.eigenvalues);"
+            "print(\"normal: \", measurement.coefficients);"
+            "print(\"axis0:  \", measurement.axes[0]);"
+            "print(\"axis1:  \", measurement.axes[1]);"
             "print(\"angle:  \", measurement.angular_errors());"
             
         ]
@@ -123,25 +156,47 @@ let main args =
     let info = reg.GetRegressionInfo()
     Log.line "center: %s" (info.Center.ToString "0.00000")
     Log.line "eigen:  %s" (info.Eigenvalues.ToString "0.00000")
+    Log.line "normal: %s" (info.Normal.ToString "0.00000")
+    // Log.line "axis0:  %s" (info.Axis0.ToString "0.00000")
+    // Log.line "axis1:  %s" (info.Axis1.ToString "0.00000")
+    Log.line "axis0:  %s" (info.Axis0.ToString "0.00000")
+    Log.line "axis1:  %s" (info.Axis1.ToString "0.00000")
     Log.line "angle:  %s" ((Constant.DegreesPerRadian * info.AngularErrors).ToString "0.00000")
     Log.stop()
     
-    exit 0
-
     Aardvark.Init()
-    Aardium.init()
 
-    let app = new OpenGlApplication()
+    // use app = new OpenGlApplication()
+    // use win = app.CreateGameWindow(8)
 
-    WebPart.startServerLocalhost 4321 [
-        MutableApp.toWebPart' app.Runtime false (App.start App.app)
-    ] |> ignore
-    
-    Aardium.run {
-        title "Aardvark rocks \\o/"
-        width 1024
-        height 768
-        url "http://localhost:4321/"
+    let sg =
+        Sg.ofList [
+            Sg.draw IndexedGeometryMode.PointList
+            |> Sg.vertexAttribute' DefaultSemantic.Positions (points |> Array.map V3f)
+            |> Sg.uniform' "PointSize" 5.0
+            |> Sg.shader {
+                do! DefaultSurfaces.trafo
+                do! DefaultSurfaces.pointSprite
+                do! DefaultSurfaces.pointSpriteFragment
+                do! DefaultSurfaces.constantColor C4f.Red
+            }
+
+            Sg.unitSphere' 4 C4b.White
+            |> Sg.transform (Trafo3d.Scale(sqrt info.Eigenvalues) * info.PlaneToWorld)
+            |> Sg.fillMode' FillMode.Line
+            |> Sg.shader {
+                do! DefaultSurfaces.trafo
+                do! DefaultSurfaces.constantColor C4f.White
+            }
+        ]
+
+    show {
+        backend Backend.GL
+        debug false
+        scene sg
     }
+
+
+
 
     0
