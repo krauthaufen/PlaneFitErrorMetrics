@@ -7,99 +7,72 @@ open Aardvark.Application.Utilities
 open Aardvark.Geometry
 open PocketPython
 open Aardvark.SceneGraph
+open Aardvark.Rendering.Text
+open Chiron
 
-type RegressionInfo3d =
-    {
-        Plane           : Plane3d
-        PlaneToWorld    : Trafo3d
-        Eigenvalues     : V3d
-        AngularErrors   : V2d
-    }
+module Bla = 
 
-    member x.Center = x.PlaneToWorld.Forward.C3.XYZ
-    member x.Normal = x.PlaneToWorld.Forward.C2.XYZ
-    member x.Axis0 = x.PlaneToWorld.Forward.C0.XYZ
-    member x.Axis1 = x.PlaneToWorld.Forward.C1.XYZ
-    member x.Ellipsoid = 
-        let e = Euclidean3d.FromTrafo3d(x.PlaneToWorld, 1E-8)
-        Ellipsoid3d(e, x.Eigenvalues)
+    let fTable() =
+        let ds = [|1;2;3;4;5;6;7;8;9;10;15;20;25;30;35;40;45;50;55;60;70;80;90;100;200;400;500;600;700;800;900;1000;10000|]
+        let ps = [0.8 .. 0.005 .. 0.996 ]
 
-module private Helpers =
+        let builder = System.Text.StringBuilder()
+        let printfn fmt = Printf.kprintf (fun str -> builder.AppendLine str |> ignore) fmt
+        let printf fmt = Printf.kprintf (fun str -> builder.Append str |> ignore) fmt
+        printfn "module FDistr = "
+        printfn "    let private ds = [| %s |]" (ds |> Seq.map (sprintf "%d") |> String.concat "; ")
+        printfn "    let private ps = [| %s |]" (ps |> Seq.map (sprintf "%.3f") |> String.concat "; ")
+        printfn "    let private invCDFTable = "
+        printfn "        [|" 
+        for p in ps do
 
-    let gamma z = 
-        let lanczosCoefficients = [76.18009172947146;-86.50532032941677;24.01409824083091;-1.231739572450155;0.1208650973866179e-2;-0.5395239384953e-5]
-        let rec sumCoefficients acc i coefficients =
-            match coefficients with
-            | []   -> acc
-            | h::t -> sumCoefficients (acc + (h/i)) (i+1.0) t
-        let gamma = 5.0
-        let x = z - 1.0
-        Math.Pow(x + gamma + 0.5, x + 0.5) * Math.Exp( -(x + gamma + 0.5) ) * Math.Sqrt( 2.0 * Math.PI ) * sumCoefficients 1.000000000190015 (x + 1.0) lanczosCoefficients
+            printfn "            // %f" p
+            for i1, d1 in Array.indexed ds do
+                printf "            "
+                for i2, d2 in Array.indexed ds do
+                    if i2 > 0 then printf "; "
+                    try printf "%.15g" (MathNet.Numerics.Distributions.FisherSnedecor.InvCDF(float d1, float d2, p))
+                    with _ -> printf "System.Double.NaN"
+                printfn ""
+            printfn ""
+            //     printfn ""
+            // printfn "        |]"
+        printfn "        |]"
+        
+        let t = builder.ToString()
+        System.IO.File.WriteAllText(@"bla.fs", t)
 
-    let beta x y =
-        gamma x * gamma y / gamma (x + y)     
+    let testFDistr() =
+      
+        let rand = Random()
+        let mutable sum = 0.0
+        let mutable maxErr = 0.0
+        let mutable minErr = 1.0
+        let iter = 100000
+        for i in 1 .. iter do   
+            let a = 2 + rand.Next(100) |> float
+            let b = 2 + rand.Next(100) |> float
+            let p = 
+                let v = (float (rand.Next(9)) / 10.0)
+                0.95 + v * 0.05
+            let mine = FDistr.invCDF a b p
 
-    let invFCDF (x : float) (d1 : float) (d2 : float) : float =
-        failwith "implement me"
-
-type LinearRegression3d with
-    member x.GetRegressionInfo(?confidenceLevel : float, ?degreesOfFreedom : int) =
-        let degreesOfFreedom = defaultArg degreesOfFreedom 2
-        let confidenceLevel = defaultArg confidenceLevel 0.95
-        //let struct(trafo, size) = x.GetTrafoAndSizes()
-       
-        let c = x.Centroid
-        let (u, s, _vt) = SVD.Decompose x.CovarianceMatrix |> Option.get
-
-        let trafo =
-            Trafo3d(
-                M44d(
-                    u.M00, u.M01, u.M02, c.X,
-                    u.M10, u.M11, u.M12, c.Y,
-                    u.M20, u.M21, u.M22, c.Z,
-                    0.0, 0.0, 0.0, 1.0
-                ),
-                M44d(
-                    u.M00, u.M10, u.M20, -Vec.dot u.C0 c,
-                    u.M01, u.M11, u.M21, -Vec.dot u.C1 c,
-                    u.M02, u.M12, u.M22, -Vec.dot u.C2 c,
-                    0.0, 0.0, 0.0, 1.0
-                )
-            )
-
-        let ev = s.Diagonal
-        let angles = 
-            let inline fppf (x : float) (d1 : int) (d2 : int) =
-                MathNet.Numerics.Distributions.FisherSnedecor.InvCDF(float d1, float d2, x)
-
-            let inline fisherStatistic (n : int) (confidence : float) (dof : int) : float =
-                fppf confidence dof (n - dof)
-            
-            let inline applyErrorScaling (nominal : V3d) (err : V3d) (n : int) : V3d =
-                nominal * V3d.PPN - err |> abs
-
-            let measurementNoise = ev.Z / (float (x.Count - degreesOfFreedom))
-            let noiseCov = 4.0 * ev * measurementNoise
-
-            let z = fisherStatistic x.Count confidenceLevel degreesOfFreedom
-            let err = z * sqrt noiseCov
-
-            let n = applyErrorScaling ev err x.Count |> sqrt
-
-            V2d(
-                atan2 n.Z n.X,
-                atan2 n.Z n.Y
-            ) 
-        {
-            Plane           = Plane3d(Vec.normalize trafo.Forward.C2.XYZ, trafo.Forward.C3.XYZ)
-            PlaneToWorld    = trafo
-            Eigenvalues     = ev
-            AngularErrors   = angles
-        }
+            printf "invCDF(%f, %f, %f): " a b p
+            let test = MathNet.Numerics.Distributions.FisherSnedecor.InvCDF(a, b, p)
+            let err = abs (mine - test) / test
+            printfn "%.2f%%" (100.0 * err)
+            sum <- sum + err
+            maxErr <- max maxErr err
+            minErr <- min minErr err
+            if err >= 0.09 then
+                failwithf "bad: %A %A %A: %A vs %A" a b p mine test
+        printfn "min: %.2f%%" (100.0 * minErr)
+        printfn "max: %.2f%%" (100.0 * maxErr)
+        printfn "avg: %.2f%%" (100.0 * sum / float iter)
 
 [<EntryPoint>]
 let main args =
-
+    
     let mutable reg = LinearRegression3d.empty
 
     let rand = RandomSystem()
@@ -118,9 +91,12 @@ let main args =
         Trafo3d.FromBasis(x,y,z,pos)
 
     let points = 
-        Array.init 250 (fun _ ->
-            let pos = rand.UniformV2d() * V2d(10.0, 6.0) - V2d(5.0, 3.0)
-            let err = (rand.UniformDouble() * 2.0 - 1.0) * 0.9
+        let bounds = Box2d.FromCenterAndSize(V2d.Zero, V2d(10.0, 6.0))
+        let scale = V2d(10.0, 5.0)
+        let maxError = 0.3
+        Array.init 1024 (fun _ ->
+            let pos = rand.UniformV2dDirection() * scale * rand.UniformDouble() //rand.UniformV2d(bounds)
+            let err = (rand.UniformDouble() * 2.0 - 1.0) * maxError
             frame.Forward.TransformPos(V3d(pos, err))
         )
 
@@ -137,6 +113,7 @@ let main args =
             "print(\"normal: \", measurement.coefficients);"
             "print(\"axis0:  \", measurement.axes[0]);"
             "print(\"axis1:  \", measurement.axes[1]);"
+            "print(\"hyp:    \", measurement.hyperbolic_axes);"
             "print(\"angle:  \", measurement.angular_errors());"
             
         ]
@@ -154,23 +131,35 @@ let main args =
 
     Log.start "ours"
     let info = reg.GetRegressionInfo()
-    Log.line "center: %s" (info.Center.ToString "0.00000")
-    Log.line "eigen:  %s" (info.Eigenvalues.ToString "0.00000")
-    Log.line "normal: %s" (info.Normal.ToString "0.00000")
-    // Log.line "axis0:  %s" (info.Axis0.ToString "0.00000")
-    // Log.line "axis1:  %s" (info.Axis1.ToString "0.00000")
-    Log.line "axis0:  %s" (info.Axis0.ToString "0.00000")
-    Log.line "axis1:  %s" (info.Axis1.ToString "0.00000")
-    Log.line "angle:  %s" ((Constant.DegreesPerRadian * info.AngularErrors).ToString "0.00000")
+    Log.line "center: %s" (info.Center.ToString "0.00000000")
+    Log.line "eigen:  %s" (info.Eigenvalues.ToString "0.00000000")
+    Log.line "normal: %s" (info.Normal.ToString "0.00000000")
+    Log.line "axis0:  %s" (info.Axis0.ToString "0.00000000")
+    Log.line "axis1:  %s" (info.Axis1.ToString "0.00000000")
+    Log.line "hyp:    %s" (info.HyperbolicAxes.ToString "0.00000000")
+    Log.line "angle:  %s" ((Constant.DegreesPerRadian * info.AngularErrors).ToString "0.00000000")
     Log.stop()
-    
+
+    let json = info.ToJson(name = "hans", uid = "myuid", points = Seq.truncate 5 points) |> Json.formatWith JsonFormattingOptions.Pretty
+    Log.line "%s" json
+    exit 0
     Aardvark.Init()
+
+    let ellipseXY =
+        let scale = 1.0
+        ShapeList.ofList [
+            ConcreteShape.ellipse C4b.White 0.2 (Ellipse2d(V2d.Zero, scale * V2d.IO * sqrt info.Eigenvalues.X, scale * V2d.OI * sqrt info.Eigenvalues.Y))
+        ]
+     
 
     // use app = new OpenGlApplication()
     // use win = app.CreateGameWindow(8)
 
     let sg =
         Sg.ofList [
+            // Sg.shape (AVal.constant ellipseXY)
+            // |> Sg.transform info.PlaneToWorld
+            
             Sg.draw IndexedGeometryMode.PointList
             |> Sg.vertexAttribute' DefaultSemantic.Positions (points |> Array.map V3f)
             |> Sg.uniform' "PointSize" 5.0

@@ -25,3 +25,4 @@ nuget Adaptify.MSBuild                      ~> 1.0.6
 
 nuget Aardium                               ~> 2.0.5
 nuget MathNet.Numerics                      ~> 4.15.0
+nuget Chiron                                ~> 6.3.1
